@@ -40,7 +40,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     } else {
         
         // Check database records to prevent duplicate user profile emails
-        $check_stmt = $conn->prepare("SELECT id FROM users WHERE email = ?");
+        $check_stmt = $conn->prepare("SELECT id FROM users WHERE user_email = ?");
         $check_stmt->bind_param("s", $email);
         $check_stmt->execute();
         $check_result = $check_stmt->get_result();
@@ -53,7 +53,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $hashed_password = password_hash($password, PASSWORD_BCRYPT);
             
             // Query parameters mapping to store rows safely in the users table database system
-            $insert_stmt = $conn->prepare("INSERT INTO users (first_name, last_name, email, phone, password, membership_tier) VALUES (?, ?, ?, ?, ?, 'Regular')");
+            $insert_stmt = $conn->prepare("INSERT INTO users (first_name, last_name, user_email, phone, password, membership_tier) VALUES (?, ?, ?, ?, ?, 'Regular')");
             $insert_stmt->bind_param("sssss", $first_name, $last_name, $email, $phone, $hashed_password);
 
             if ($insert_stmt->execute()) {
