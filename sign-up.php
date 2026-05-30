@@ -1,75 +1,47 @@
 <?php
+// sign-up.php
 session_start();
 
-// =========================================================================
-// 1. DATABASE CONFIGURATION (Direct phpMyAdmin Connection Engine)
-// =========================================================================
-$host     = "localhost";
-$db_user  = "root";
-$db_pass  = "";
-$db_name  = "haven_hotel"; // Ensure this matches your phpMyAdmin database name exactly
-
-$conn = new mysqli($host, $db_user, $db_pass, $db_name);
-
-// Fail-safe verification check on database connection status
-if ($conn->connect_error) {
-    die("Direct Database Connection to phpMyAdmin Failed: " . $conn->connect_error);
-}
+require_once 'classes/Database.php';
+require_once 'classes/User.php';
 
 $error = "";
 $success = "";
 
-// =========================================================================
-// 2. BACKEND CONTROLLER LOGIC (Triggers on "Register Account" Form Submission)
-// =========================================================================
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    // Collect and sanitize user inputs
+    // Instantiate OOP engine layers
+    $database = new Database();
+    $dbConn = $database->getConnection();
+    $userEngine = new User($dbConn);
+
+    // Sanitize user inputs safely
     $first_name = trim(filter_var($_POST['first_name'], FILTER_SANITIZE_SPECIAL_CHARS));
     $last_name  = trim(filter_var($_POST['last_name'], FILTER_SANITIZE_SPECIAL_CHARS));
     $email      = trim(filter_var($_POST['email'], FILTER_SANITIZE_EMAIL));
     $phone      = trim(filter_var($_POST['phone'], FILTER_SANITIZE_SPECIAL_CHARS));
     $password   = $_POST['password'];
+    $admin_key  = trim($_POST['admin_key'] ?? '');
 
-    // Mandatory data verification check
     if (empty($first_name) || empty($last_name) || empty($email) || empty($password)) {
         $error = "Please fill in all mandatory fields marked with an asterisk (*).";
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error = "Please enter a valid email address style configuration.";
-    } elseif (strlen($password) < 6) {
+        $error = "Please enter a valid email address configuration.";
+    } elseif (strlen($password) < 8) {
         $error = "Password security constraint failure: Must be at least 8 characters.";
     } else {
+        // Trigger OOP Account creation routines
+        $registrationResult = $userEngine->register($first_name, $last_name, $email, $phone, $password, $admin_key);
         
-        // Check database records to prevent duplicate user profile emails
-        $check_stmt = $conn->prepare("SELECT id FROM users WHERE user_email = ?");
-        $check_stmt->bind_param("s", $email);
-        $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
-
-        if ($check_result->num_rows > 0) {
-            $error = "This email address is already registered inside phpMyAdmin.";
+        if ($registrationResult === true) {
+            $success = "Account successfully registered to database! Redirecting to credentials gateway...";
+            echo "<script>setTimeout(function(){ window.location.href = 'login.php'; }, 2000);</script>";
         } else {
-            
-            // Securely hash the password string before writing it to database disk space
-            $hashed_password = password_hash($password, PASSWORD_BCRYPT);
-            
-            // Query parameters mapping to store rows safely in the users table database system
-            $insert_stmt = $conn->prepare("INSERT INTO users (first_name, last_name, user_email, phone, password, membership_tier) VALUES (?, ?, ?, ?, ?, 'Regular')");
-            $insert_stmt->bind_param("sssss", $first_name, $last_name, $email, $phone, $hashed_password);
-
-            if ($insert_stmt->execute()) {
-                $success = "Account successfully written to phpMyAdmin database! Redirecting...";
-                
-                // Perform automated script navigation directly into your login portal panel
-                echo "<script>setTimeout(function(){ window.location.href = 'login.php'; }, 2000);</script>";
-            } else {
-                $error = "Critical database record write error execution failure: " . $insert_stmt->error;
-            }
-            $insert_stmt->close();
+            $error = $registrationResult;
         }
-        $check_stmt->close();
     }
+    
+    $database->closeConnection();
 }
-$conn->close();
 ?>
 
 <!DOCTYPE html>
@@ -89,14 +61,14 @@ $conn->close();
             <p>Join Haven Hotel to track reservations and enjoy luxury perks</p>
         </div>
 
-        <form action="" method="POST" class="form-grid">
+        <form action="sign-up.php" method="POST" class="form-grid">
             
             <?php if (!empty($error)): ?>
-                <div class="alert alert-error"><?php echo $error; ?></div>
+                <div class="alert alert-error" style="grid-column: span 2; background: #fef2f2; border-left: 4px solid #ef4444; color: #991b1b; padding: 12px; border-radius: 6px; margin-bottom: 10px; font-size: 14px;"><?php echo $error; ?></div>
             <?php endif; ?>
 
             <?php if (!empty($success)): ?>
-                <div class="alert alert-success"><?php echo $success; ?></div>
+                <div class="alert alert-success" style="grid-column: span 2; background: #f0fdf4; border-left: 4px solid #22c55e; color: #166534; padding: 12px; border-radius: 6px; margin-bottom: 10px; font-size: 14px;"><?php echo $success; ?></div>
             <?php endif; ?>
 
             <div class="input-wrapper">
