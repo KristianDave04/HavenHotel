@@ -2,19 +2,18 @@
 session_start();
 
 // Database Configuration Parameters
-$host     = "localhost";
-$db_user  = "root";
-$db_pass  = "";
-$db_name  = "haven_hotel";
+$host = "localhost";
+$db_user = "root";
+$db_pass = "";
+$db_name = "haven_hotel"; // Note: Ensure this matches your phpMyAdmin database name exactly
+
 $conn = new mysqli($host, $db_user, $db_pass, $db_name);
 
 if ($conn->connect_error) {
     die("Database Connection Error: " . $conn->connect_error);
 }
 
-// ========================================================
 // ADVANCED CONFIGURATION: XML DOM EXPORT ENGINE PIPELINE
-// ========================================================
 if (isset($_GET['action']) && $_GET['action'] === 'export_xml') {
     // Clear any active layout output buffers to ensure valid data transmission
     if (ob_get_length()) ob_end_clean();
@@ -65,21 +64,18 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_xml') {
     exit();
 }
 
-// ========================================================
 // DATABASE PIPELINE: PARSE AND SYNC IMPORTED XML RECORDS
-// ========================================================
 if (isset($_POST['action_import_xml']) && isset($_FILES['xml_upload_file'])) {
     if ($_FILES['xml_upload_file']['error'] === UPLOAD_ERR_OK) {
         $file_path = $_FILES['xml_upload_file']['tmp_name'];
-        
         libxml_use_internal_errors(true);
         $xml = simplexml_load_file($file_path);
-        
+
         if ($xml !== false) {
             if ($xml->getName() === 'havenhotel') {
                 $imported_count = 0;
-                
-                // --- USER FOREIGN KEY SAFEGUARD ---
+
+                // USER FOREIGN KEY SAFEGUARD
                 $fallback_user_lookup = $conn->query("SELECT id FROM users LIMIT 1");
                 if ($fallback_user_lookup && $fallback_user_lookup->num_rows > 0) {
                     $fallback_row = $fallback_user_lookup->fetch_assoc();
@@ -88,49 +84,44 @@ if (isset($_POST['action_import_xml']) && isset($_FILES['xml_upload_file'])) {
                     $conn->query("INSERT INTO users (id, first_name, last_name, role) VALUES (1, 'System', 'Import', 'admin')");
                     $user_id_fallback = 1;
                 }
-                
+
                 foreach ($xml->reservation as $res) {
-                    $ref_num      = (string)$res->reference_number;
-                    $guest_name   = (string)$res->name;
-                    $room_type    = (string)$res->type; 
-                    $check_in     = (string)$res->check_in;
-                    $check_out    = (string)$res->check_out;
-                    $total_price  = (float)$res->price;
-                    $status       = (string)$res->status;
+                    $ref_num = (string)$res->reference_number;
+                    $guest_name = (string)$res->name;
+                    $room_type = (string)$res->type;
+                    $check_in = (string)$res->check_in;
+                    $check_out = (string)$res->check_out;
+                    $status = (string)$res->status;
+                    $total_price = (float)$res->price;
                     $spec_request = (string)$res->special_request;
 
-                    // --- ROOM FOREIGN KEY SAFEGUARD ---
+                    // --- ROOM FOREIGN KEY SAFEGUARD
                     $room_stmt = $conn->prepare("SELECT room_id FROM rooms WHERE room_type = ? LIMIT 1");
                     $room_stmt->bind_param("s", $room_type);
                     $room_stmt->execute();
                     
-                    // FIX: Fetch the result exactly ONCE to prevent sync pipeline blocks
                     $room_res = $room_stmt->get_result();
-                    
                     if ($room_res && $room_res->num_rows > 0) {
                         $room_row = $room_res->fetch_assoc();
                         $room_id_resolved = (int)$room_row['room_id'];
                     } else {
-                        // Fallback: If no direct text match, assign to the first available room
                         $fallback_room_lookup = $conn->query("SELECT room_id FROM rooms LIMIT 1");
                         if ($fallback_room_lookup && $fallback_room_lookup->num_rows > 0) {
                             $f_room = $fallback_room_lookup->fetch_assoc();
                             $room_id_resolved = (int)$f_room['room_id'];
                         } else {
-                            // Emergency Fallback if table is completely empty
                             $conn->query("INSERT INTO rooms (room_number, room_type, price_per_night, status) VALUES ('101', 'Standard Room', 3500.00, 'Available')");
                             $room_id_resolved = $conn->insert_id;
                         }
                     }
                     $room_stmt->close();
-                    // -------------------------------------
 
-                    // Step B: Check if reference number already exists inside phpMyAdmin bookings table
+                    // Check if reference number already exists inside phpMyAdmin bookings table
                     $check_stmt = $conn->prepare("SELECT booking_id FROM bookings WHERE booking_reference = ?");
                     $check_stmt->bind_param("s", $ref_num);
                     $check_stmt->execute();
                     $check_res = $check_stmt->get_result();
-                    
+
                     if ($check_res->num_rows > 0) {
                         // Data Sync Patch: Update existing ledger matching reference code
                         $update_stmt = $conn->prepare("UPDATE bookings SET room_id = ?, room_type = ?, check_in_date = ?, check_out_date = ?, total_price = ?, booking_status = ?, special_requests = ? WHERE booking_reference = ?");
@@ -138,7 +129,7 @@ if (isset($_POST['action_import_xml']) && isset($_FILES['xml_upload_file'])) {
                         $update_stmt->execute();
                         $update_stmt->close();
                     } else {
-                        // Data Insertion: Inject brand new data row using validated user_id and room_id references
+                        // Data Insertion: Inject brand new data data row using validated user id and room id references
                         $insert_stmt = $conn->prepare("INSERT INTO bookings (user_id, room_id, booking_reference, room_type, check_in_date, check_out_date, total_price, booking_status, special_requests) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
                         $insert_stmt->bind_param("iisssssss", $user_id_fallback, $room_id_resolved, $ref_num, $room_type, $check_in, $check_out, $total_price, $status, $spec_request);
                         $insert_stmt->execute();
@@ -147,13 +138,13 @@ if (isset($_POST['action_import_xml']) && isset($_FILES['xml_upload_file'])) {
                     $check_stmt->close();
                     $imported_count++;
                 }
-                
+
                 $msg = "XML Import System Event: Processed and synchronized " . $imported_count . " entries to the local repository.";
                 $notif = $conn->prepare("INSERT INTO notifications (message) VALUES (?)");
                 $notif->bind_param("s", $msg);
                 $notif->execute();
                 $notif->close();
-                
+
                 header("Location: admin_dashboard.php?tab=preservation&import_success=" . $imported_count);
                 exit();
             }
@@ -163,48 +154,33 @@ if (isset($_POST['action_import_xml']) && isset($_FILES['xml_upload_file'])) {
     header("Location: admin_dashboard.php?tab=preservation&import_error=1");
     exit();
 }
+
 // MASTER IMAGE POOL: 20 High-Quality Room Visuals
 $room_image_pool = [
     "https://images.unsplash.com/photo-1611892440504-42a792e24d32?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1590490360182-c33d57733427?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1566665797739-1674de7a421a?q=80&w=600&auto=format&fit=crop",
     "https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1578683010236-d716f9a3f461?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1631049307264-da0ec9d70304?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1512918728675-ed5a9ecdebfd?q=80&w=600&auto=format&fit=crop",
     "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1445019980597-93fa8acb246c?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1522771739844-6a9f6d7f748c?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1595576508898-0ad5c879a061?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1590073844006-3337978788c6?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1598928506311-c55ded91a20c?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1618773928121-c37242e47177?q=80&w=600&auto=format&fit=crop",
-    "https://images.unsplash.com/photo-1629140727571-9b5c6f6267b4?q=80&w=600&auto=format&fit=crop",
     "https://images.unsplash.com/photo-1579640212006-29d1e8284534?q=80&w=600&auto=format&fit=crop",
     "https://images.unsplash.com/photo-1560661879-16a5d4828135?q=80&w=600&auto=format&fit=crop"
 ];
 
 // CONTROLLER: PROCESSING ADMINISTRATIVE WRITE ACTIONS (CRUD)
-
-// Action: Update Booking Reservation Status
 if (isset($_POST['update_status'])) {
-    $booking_id = (int)$_POST['booking_id'];
-    $new_status = $_POST['status_value'];
-    
-    if (in_array($new_status, ['Confirmed', 'Cancelled', 'Pending'])) {
-        $stmt = $conn->prepare("UPDATE bookings SET booking_status = ? WHERE booking_id = ?");
-        $stmt->bind_param("si", $new_status, $booking_id);
-        $stmt->execute();
-        $stmt->close();
-        header("Location: admin_dashboard.php?tab=preservation&success=1");
-        exit();
-    }
+    $b_id = (int)$_POST['booking_id'];
+    $target_status = $_POST['status_value'];
+
+    $stmt = $conn->prepare("UPDATE bookings SET booking_status = ? WHERE booking_id = ?");
+    $stmt->bind_param("si", $target_status, $b_id);
+    $stmt->execute();
+    $stmt->close();
+
+    $msg = "Admin Alert: Booking ID #$b_id was manually set to status: $target_status.";
+    $log = $conn->prepare("INSERT INTO notifications (message) VALUES (?)");
+    $log->bind_param("s", $msg);
+    $log->execute();
+    $log->close();
 }
 
-// Action: Delete Testimonial Entry
 if (isset($_POST['delete_testimonial'])) {
     $testimonial_id = (int)$_POST['testimonial_id'];
     $stmt = $conn->prepare("DELETE FROM testimonials WHERE id = ?");
@@ -215,28 +191,23 @@ if (isset($_POST['delete_testimonial'])) {
     exit();
 }
 
-// Action: Delete Room Unit
 if (isset($_POST['delete_room'])) {
     $room_id = (int)$_POST['room_id'];
     
-    // Fetch room number for notification ledger before deletion
     $stmt_info = $conn->prepare("SELECT room_number FROM rooms WHERE room_id = ?");
     $stmt_info->bind_param("i", $room_id);
     $stmt_info->execute();
     $res = $stmt_info->get_result();
-    
     if ($row = $res->fetch_assoc()) {
         $r_num = $row['room_number'];
         $msg = "Room Purged: Room " . $r_num . " has been permanently removed from inventory.";
-        
         $notif = $conn->prepare("INSERT INTO notifications (message) VALUES (?)");
         $notif->bind_param("s", $msg);
         $notif->execute();
         $notif->close();
     }
     $stmt_info->close();
-    
-    // Execute standard wipe query
+
     $stmt = $conn->prepare("DELETE FROM rooms WHERE room_id = ?");
     $stmt->bind_param("i", $room_id);
     $stmt->execute();
@@ -245,49 +216,43 @@ if (isset($_POST['delete_room'])) {
     exit();
 }
 
-// Action: Insert New Room Unit Configuration with RANDOM IMAGE GENERATION & Push Notice
 if (isset($_POST['add_new_room'])) {
     $room_number = strip_tags(trim($_POST['room_number']));
-    $room_type   = strip_tags(trim($_POST['room_type']));
-    $price       = (float)$_POST['price_per_night'];
-    $status      = $_POST['room_status'];
+    $room_type = strip_tags(trim($_POST['room_type']));
+    $price = (float)$_POST['price_per_night'];
+    $status = $_POST['room_status'];
     $description = strip_tags(trim($_POST['description']));
-    
-    // Pick a random image from the pool
+
     $random_image = $room_image_pool[array_rand($room_image_pool)];
-    
+
     $stmt = $conn->prepare("INSERT INTO rooms (room_number, room_type, price_per_night, status, description, image_url) VALUES (?, ?, ?, ?, ?, ?)");
     $stmt->bind_param("ssdsss", $room_number, $room_type, $price, $status, $description, $random_image);
     
     if ($stmt->execute()) {
         $msg = "New Room Deployed: Room " . $room_number . " (" . $room_type . ") is now available at ₱" . number_format($price, 2) . "!";
-        
         $notif = $conn->prepare("INSERT INTO notifications (message) VALUES (?)");
         $notif->bind_param("s", $msg);
         $notif->execute();
         $notif->close();
-        
         $stmt->close();
         header("Location: admin_dashboard.php?tab=rooms&added=1");
         exit();
     }
 }
 
-// Action: Save Modifications to Existing Room Unit Properties & Push Notice
 if (isset($_POST['edit_existing_room'])) {
-    $room_id     = (int)$_POST['room_id'];
+    $room_id = (int)$_POST['room_id'];
     $room_number = strip_tags(trim($_POST['room_number']));
-    $room_type   = strip_tags(trim($_POST['room_type']));
-    $price       = (float)$_POST['price_per_night'];
-    $status      = $_POST['room_status'];
+    $room_type = strip_tags(trim($_POST['room_type']));
+    $price = (float)$_POST['price_per_night'];
+    $status = $_POST['room_status'];
     $description = strip_tags(trim($_POST['description']));
-    
+
     $stmt = $conn->prepare("UPDATE rooms SET room_number=?, room_type=?, price_per_night=?, status=?, description=? WHERE room_id=?");
     $stmt->bind_param("ssdssi", $room_number, $room_type, $price, $status, $description, $room_id);
     
     if ($stmt->execute()) {
         $msg = "Room Altered: Desk modified properties for Room " . $room_number . " (Price: ₱" . number_format($price, 2) . " | Status: " . $status . ").";
-        
         $notif = $conn->prepare("INSERT INTO notifications (message) VALUES (?)");
         $notif->bind_param("s", $msg);
         $notif->execute();
@@ -307,27 +272,27 @@ $bookings_metrics = $bookings_metrics_query->fetch_assoc();
 
 $global_ledger = [];
 $ledger_query = $conn->query("SELECT b.*, CONCAT(u.first_name, ' ', u.last_name) AS guest_name, u.user_email AS guest_email, u.phone AS guest_phone, b.special_requests FROM bookings b LEFT JOIN users u ON b.user_id = u.id ORDER BY b.created_at DESC");
-while ($row = $ledger_query->fetch_assoc()) { 
-    $global_ledger[] = $row; 
+while ($row = $ledger_query->fetch_assoc()) {
+    $global_ledger[] = $row;
 }
 
 $admin_reviews_list = [];
 $admin_reviews_query = $conn->query("SELECT t.*, CONCAT(u.first_name, ' ', u.last_name) AS guest_name, u.user_email AS guest_email FROM testimonials t LEFT JOIN users u ON t.user_id = u.id ORDER BY t.created_at DESC");
-while ($r = $admin_reviews_query->fetch_assoc()) { 
-    $admin_reviews_list[] = $r; 
+while ($r = $admin_reviews_query->fetch_assoc()) {
+    $admin_reviews_list[] = $r;
 }
 
 $system_rooms_list = [];
 $rooms_query = $conn->query("SELECT * FROM rooms ORDER BY room_number ASC");
-while ($rm = $rooms_query->fetch_assoc()) { 
-    $system_rooms_list[] = $rm; 
+while ($rm = $rooms_query->fetch_assoc()) {
+    $system_rooms_list[] = $rm;
 }
 
 $all_users_list = [];
 $u_lookup_query = $conn->query("SELECT first_name, last_name, user_email, role, created_at FROM users ORDER BY created_at DESC");
 if ($u_lookup_query) {
-    while ($usr = $u_lookup_query->fetch_assoc()) { 
-        $all_users_list[] = $usr; 
+    while ($usr = $u_lookup_query->fetch_assoc()) {
+        $all_users_list[] = $usr;
     }
 }
 
@@ -344,425 +309,689 @@ $active_tab = $_GET['tab'] ?? 'home';
     <link rel="stylesheet" href="./ui.admin/a.dashboard.css">
 </head>
 <body>
- 
- <aside class="admin-sidebar">
-     <div class="sidebar-brand">Haven<span>Hotel</span></div>
-     <ul class="sidebar-menu">
-         <li class="<?= $active_tab === 'home' ? 'active-tab' : '' ?>" data-target="panel_home">
-             <a onclick="switchTab('home')"><i class="fa-solid fa-chart-pie"></i> Dashboard Hub</a>
-         </li>
-         <li class="<?= $active_tab === 'preservation' ? 'active-tab' : '' ?>" data-target="panel_preservation">
-             <a onclick="switchTab('preservation')"><i class="fa-solid fa-bed"></i> Bookings Ledger</a>
-         </li>
-         <li class="<?= $active_tab === 'rooms' ? 'active-tab' : '' ?>" data-target="panel_rooms">
-             <a onclick="switchTab('rooms')"><i class="fa-solid fa-door-open"></i> Control Panel</a>
-         </li>
-         <li class="<?= $active_tab === 'review' ? 'active-tab' : '' ?>" data-target="panel_review">
-             <a onclick="switchTab('review')"><i class="fa-solid fa-star"></i> Guest Reviews</a>
-         </li>
-         <li style="margin-top: 40px; border-top: 1px solid #1e293b; padding-top: 10px;">
-             <a href="admin_login.php" style="color: #ef4444;"><i class="fa-solid fa-right-from-bracket"></i> Exit System</a>
-         </li>
-     </ul>
- </aside>
- 
- <main class="admin-stage">
-     
-     <div id="panel_home" class="tab-panel-view <?= $active_tab === 'home' ? 'active-view' : '' ?>">
-         <header class="stage-header"><h1>System Metrics Hub</h1></header>
-         
-         <div class="analytics-grid">
-             <div class="analytic-card" onclick="openSystemInspectionView('active_users')">
-                 <div class="card-icon-frame icon-blue"><i class="fa-solid fa-users"></i></div>
-                 <div class="card-meta-box"><h3>Active Users</h3><div class="num-val"><?= $roles_metrics['users_count'] ?></div></div>
-             </div>
-             <div class="analytic-card" onclick="openSystemInspectionView('admin_staff')">
-                 <div class="card-icon-frame icon-purple"><i class="fa-solid fa-user-shield"></i></div>
-                 <div class="card-meta-box"><h3>Admin Staff</h3><div class="num-val"><?= $roles_metrics['admins_count'] ?></div></div>
-             </div>
-             <div class="analytic-card" onclick="openSystemInspectionView('bookings')">
-                 <div class="card-icon-frame icon-green"><i class="fa-solid fa-book"></i></div>
-                 <div class="card-meta-box"><h3>Bookings</h3><div class="num-val"><?= $bookings_metrics['total_bookings'] ?></div></div>
-             </div>
-             <div class="analytic-card" onclick="openSystemInspectionView('pendings')">
-                 <div class="card-icon-frame icon-gold"><i class="fa-solid fa-clock"></i></div>
-                 <div class="card-meta-box"><h3>Pendings</h3><div class="num-val"><?= $bookings_metrics['pending_bookings'] ?></div></div>
-             </div>
-             <div class="analytic-card" onclick="openSystemInspectionView('canceled')">
-                 <div class="card-icon-frame icon-red"><i class="fa-solid fa-circle-xmark"></i></div>
-                 <div class="card-meta-box"><h3>Canceled</h3><div class="num-val"><?= $bookings_metrics['cancelled_bookings'] ?></div></div>
-             </div>
-         </div>
-         
-         <div class="charts-row">
-             <div class="chart-box-container" style="display: flex; flex-direction: column; justify-content: space-between;">
-                 <h3 style="margin-bottom: 5px;">Reservation & Account Metric System</h3>
-                 <div class="mock-bar-graph">
-                     <?php
-                     $max_val = max(1, $roles_metrics['users_count'], $roles_metrics['admins_count'], $bookings_metrics['pending_bookings'], $bookings_metrics['confirmed_bookings'], $bookings_metrics['cancelled_bookings']);
-                     ?>
-                     <div class="graph-column-group">
-                         <div class="graph-pillar pillar-fill-user" style="height: <?= ($roles_metrics['users_count']/$max_val)*100 ?>%;">
-                             <div class="pillar-tooltip">Users: <?= $roles_metrics['users_count'] ?></div>
-                         </div>
-                         <div class="graph-pillar pillar-fill-admin" style="height: <?= ($roles_metrics['admins_count']/$max_val)*100 ?>%;">
-                             <div class="pillar-tooltip">Admins: <?= $roles_metrics['admins_count'] ?></div>
-                         </div>
-                     </div>
-                     <div class="graph-column-group">
-                         <div class="graph-pillar pillar-fill-pending" style="height: <?= ($bookings_metrics['pending_bookings']/$max_val)*100 ?>%;">
-                             <div class="pillar-tooltip">Pending: <?= $bookings_metrics['pending_bookings'] ?></div>
-                         </div>
-                         <div class="graph-pillar pillar-fill-confirmed" style="height: <?= ($bookings_metrics['confirmed_bookings']/$max_val)*100 ?>%;">
-                             <div class="pillar-tooltip">Confirmed: <?= $bookings_metrics['confirmed_bookings'] ?></div>
-                         </div>
-                         <div class="graph-pillar pillar-fill-cancelled" style="height: <?= ($bookings_metrics['cancelled_bookings']/$max_val)*100 ?>%;">
-                             <div class="pillar-tooltip">Cancelled: <?= $bookings_metrics['cancelled_bookings'] ?></div>
-                         </div>
-                     </div>
-                 </div>
-                 
-                 <div style="display: flex; justify-content: space-around; margin-top: 15px; font-size: 11px; font-weight: 600; color: #64748b; text-align: center;">
-                     <div style="flex: 1; max-width: 140px; display: flex; flex-direction: column; gap: 4px;">
-                         <span style="color: #0f172a;">Account Deployments</span>
-                         <small style="font-weight: 400; font-size: 10px;">(Joined Users vs Staff)</small>
-                     </div>
-                     <div style="flex: 1; max-width: 140px; display: flex; flex-direction: column; gap: 4px;">
-                         <span style="color: #0f172a;">Operational Invoices</span>
-                         <small style="font-weight: 400; font-size: 10px;">(Pending/Arrived/Voided)</small>
-                     </div>
-                 </div>
-             </div>
-             
-             <div class="chart-box-container" style="text-align:center; display:flex; flex-direction:column; justify-content:center;">
-                 <h3>Success Ratio</h3>
-                 <div style="font-size:36px; font-weight:700; color:#16a34a;">
-                     <?= $bookings_metrics['total_bookings'] > 0 ? round(($bookings_metrics['confirmed_bookings'] / $bookings_metrics['total_bookings']) * 100, 1) : 0 ?>%
-                 </div>
-             </div>
-         </div>
-     </div>
-     
-     <div id="panel_preservation" class="tab-panel-view <?= $active_tab === 'preservation' ? 'active-view' : '' ?>">
-         <header class="stage-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 35px;">
-             <h1>Reservations Ledger Panel</h1>
-             
-             <div style="display: flex; gap: 10px; align-items: center;">
-                 
-                 <form method="POST" enctype="multipart/form-data" style="display: inline-flex; gap: 6px; align-items: center; background: white; padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1;">
-                     <input type="file" name="xml_upload_file" accept=".xml" required style="font-size: 12px; max-width: 170px;">
-                     <button type="submit" name="action_import_xml" class="control-btn btn-success" style="padding: 6px 12px; background-color: #10b981;">
-                         <i class="fa-solid fa-file-import"></i> Import XML
-                     </button>
-                 </form>
 
-                 <a href="admin_dashboard.php?action=export_xml" class="control-btn btn-primary" style="background-color: #1e293b; border: 1px solid #cbd5e1; color: white; padding: 10px 14px;">
-                     <i class="fa-solid fa-file-export"></i> Export to XML
-                 </a>
-             </div>
-         </header>
-         
-         <div class="table-card-wrapper">
-             <table class="data-ledger-table">
-                 <thead>
-                     <tr>
-                         <th>Ref Number</th>
-                         <th>Guest Name</th>
-                         <th>Accommodation Target</th>
-                         <th>Status</th>
-                         <th style="text-align:right;">Actions</th>
-                     </tr>
-                 </thead>
-                 <tbody>
-                     <?php foreach ($global_ledger as $b): ?>
-                         <tr>
-                             <td><strong><?= htmlspecialchars($b['booking_reference']) ?></strong></td>
-                             <td><?= htmlspecialchars($b['guest_name']) ?></td>
-                             <td><?= htmlspecialchars($b['room_type']) ?></td>
-                             <td><span class="status-pill pill-<?= strtolower($b['booking_status']) ?>"><?= $b['booking_status'] ?></span></td>
-                             <td style="text-align:right;">
-                                 <button class="control-btn btn-info" onclick='displayBookingDetails(<?= json_encode($b) ?>)'>Details</button>
-                                 <?php if ($b['booking_status'] === 'Pending'): ?>
-                                     <form method="POST" style="display:inline;">
-                                         <input type="hidden" name="booking_id" value="<?= $b['booking_id'] ?>">
-                                         <input type="hidden" name="status_value" value="Confirmed">
-                                         <button type="submit" name="update_status" class="control-btn btn-success">Approve</button>
-                                     </form>
-                                     <form method="POST" style="display:inline;">
-                                         <input type="hidden" name="booking_id" value="<?= $b['booking_id'] ?>">
-                                         <input type="hidden" name="status_value" value="Cancelled">
-                                         <button type="submit" name="update_status" class="control-btn btn-danger">Cancel</button>
-                                     </form>
-                                 <?php endif; ?>
-                             </td>
-                         </tr>
-                     <?php endforeach; ?>
-                 </tbody>
-             </table>
-         </div>
-     </div>
-     
-     <div id="panel_rooms" class="tab-panel-view <?= $active_tab === 'rooms' ? 'active-view' : '' ?>">
-         <header class="stage-header">
-             <h1>Hotel Inventory Manager</h1>
-             <button class="control-btn btn-primary" onclick="openRoomModal()"><i class="fa-solid fa-plus"></i> Initialize Room Type</button>
-         </header>
-         <div class="table-card-wrapper">
-             <table class="data-ledger-table">
-                 <thead>
-                     <tr>
-                         <th>Visual</th>
-                         <th>Room Number</th>
-                         <th>Room Type Label</th>
-                         <th>Price Per Night</th>
-                         <th>Status</th>
-                         <th style="text-align:right;">Modification Controls</th>
-                     </tr>
-                 </thead>
-                 <tbody>
-                     <?php foreach ($system_rooms_list as $room):
-                         $img_src = !empty($room['image_url']) ? $room['image_url'] : 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?q=80&w=200';
-                     ?>
-                         <tr>
-                             <td><img src="<?= htmlspecialchars($img_src) ?>" style="width: 60px; height: 40px; object-fit: cover; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></td>
-                             <td><strong><?= htmlspecialchars($room['room_number']) ?></strong></td>
-                             <td>
-                                 <?= htmlspecialchars($room['room_type']) ?><br>
-                                 <small style="color:#64748b; font-size:11px;"><?= htmlspecialchars(substr($room['description'] ?? 'No descriptions registered.', 0, 40)) ?>...</small>
-                             </td>
-                             <td><strong>₱<?= number_format($room['price_per_night'], 2) ?></strong></td>
-                             <td><span class="status-pill pill-<?= strtolower(str_replace(' ', '_', $room['status'])) ?>"><?= $room['status'] ?></span></td>
-                             <td style="text-align:right;">
-                                 <button class="control-btn btn-info" onclick='openRoomModal(<?= json_encode($room) ?>)'><i class="fa-solid fa-pen-to-square"></i> Edit</button>
-                                 <form method="POST" style="display:inline;" onsubmit="return confirm('WARNING: Are you sure you want to permanently delete Room <?= htmlspecialchars($room['room_number']) ?>? This action cannot be undone.');">
-                                     <input type="hidden" name="room_id" value="<?= $room['room_id'] ?>">
-                                     <button type="submit" name="delete_room" class="control-btn btn-danger"><i class="fa-solid fa-trash"></i> Delete</button>
-                                 </form>
-                             </td>
-                         </tr>
-                     <?php endforeach; ?>
-                 </tbody>
-             </table>
-         </div>
-     </div>
-     
-     <div id="panel_review" class="tab-panel-view <?= $active_tab === 'review' ? 'active-view' : '' ?>">
-         <header class="stage-header"><h1>Guest Feedback Matrix</h1></header>
-         <div class="reviews-panel-masonry">
-             <?php foreach ($admin_reviews_list as $rev): ?>
-                 <div class="admin-review-card">
-                     <div style="color:#eab308; margin-bottom:8px;">
-                         <?php for($i=1; $i<=5; $i++) echo ($i <= $rev['rating']) ? '★' : '☆'; ?>
-                     </div>
-                     <p style="font-style:italic; font-size:14px; margin-bottom:12px;">"<?= htmlspecialchars($rev['review_text']) ?>"</p>
-                     <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#64748b;">
-                         <div><strong><?= htmlspecialchars($rev['guest_name']) ?></strong></div>
-                         <form method="POST" onsubmit="return confirm('Permanently drop feedback item?');" style="margin-left:auto;">
-                             <input type="hidden" name="testimonial_id" value="<?= $rev['id'] ?>">
-                             <button type="submit" name="delete_testimonial" class="control-btn btn-danger" style="padding:4px 8px; font-size:11px;">Purge</button>
-                         </form>
-                     </div>
-                 </div>
-             <?php endforeach; ?>
-         </div>
-     </div>
+ <aside class="admin-sidebar">
+  <div class="sidebar-brand">Haven<span>Hotel</span></div>
+  <ul class="sidebar-menu">
+    <li class="<?= $active_tab === 'home' ? 'active-tab' : '' ?>" data-target="panel_home">
+      <a onclick="switchTab('home')"><i class="fa-solid fa-chart-pie"></i> Dashboard Hub</a>
+    </li>
+    <li class="<?= $active_tab === 'preservation' ? 'active-tab' : '' ?>" data-target="panel_preservation">
+      <a onclick="switchTab('preservation')"><i class="fa-solid fa-bed"></i> Bookings Ledger</a>
+    </li>
+    <li class="<?= $active_tab === 'rooms' ? 'active-tab' : '' ?>" data-target="panel_rooms">
+      <a onclick="switchTab('rooms')"><i class="fa-solid fa-door-open"></i> Control Panel</a>
+    </li>
+    <li class="<?= $active_tab === 'review' ? 'active-tab' : '' ?>" data-target="panel_review">
+      <a onclick="switchTab('review')"><i class="fa-solid fa-star"></i> Guest Reviews</a>
+    </li>
+    <li style="margin-top: 40px; border-top: 1px solid #1e293b; padding-top: 10px;">
+      <a href="admin_login.php" style="color: #ef4444;"><i class="fa-solid fa-right-from-bracket"></i> Exit System</a>
+    </li>
+  </ul>
+ </aside>
+
+ <main class="admin-stage">
+  <div id="panel_home" class="tab-panel-view <?= $active_tab === 'home' ? 'active-view' : '' ?>">
+    <header class="stage-header"><h1>System Metrics Hub</h1></header>
+    
+    <div class="analytics-grid">
+      <div class="analytic-card" onclick="openSystemInspectionView('active_users')">
+        <div class="card-icon-frame icon-blue"><i class="fa-solid fa-users"></i></div>
+        <div class="card-meta-box"><h3>Active Users</h3><div class="num-val"><?= $roles_metrics['users_count'] ?></div></div>
+      </div>
+      <div class="analytic-card" onclick="openSystemInspectionView('admin_staff')">
+        <div class="card-icon-frame icon-purple"><i class="fa-solid fa-user-shield"></i></div>
+        <div class="card-meta-box"><h3>Admin Staff</h3><div class="num-val"><?= $roles_metrics['admins_count'] ?></div></div>
+      </div>
+      <div class="analytic-card" onclick="openSystemInspectionView('bookings')">
+        <div class="card-icon-frame icon-green"><i class="fa-solid fa-book"></i></div>
+        <div class="card-meta-box"><h3>Bookings</h3><div class="num-val"><?= $bookings_metrics['total_bookings'] ?></div></div>
+      </div>
+      <div class="analytic-card" onclick="openSystemInspectionView('pendings')">
+        <div class="card-icon-frame icon-gold"><i class="fa-solid fa-clock"></i></div>
+        <div class="card-meta-box"><h3>Pendings</h3><div class="num-val"><?= $bookings_metrics['pending_bookings'] ?></div></div>
+      </div>
+      <div class="analytic-card" onclick="openSystemInspectionView('canceled')">
+        <div class="card-icon-frame icon-red"><i class="fa-solid fa-circle-xmark"></i></div>
+        <div class="card-meta-box"><h3>Canceled</h3><div class="num-val"><?= $bookings_metrics['cancelled_bookings'] ?></div></div>
+      </div>
+    </div>
+
+    <div class="charts-row">
+      <div class="chart-box-container" style="display: flex; flex-direction: column; justify-content: space-between;">
+        <h3 style="margin-bottom: 5px;">Reservation & Account Metric System</h3>
+        <div class="mock-bar-graph">
+          <?php
+          $max_val = max(1, $roles_metrics['users_count'], $roles_metrics['admins_count'], $bookings_metrics['pending_bookings'], $bookings_metrics['confirmed_bookings'], $bookings_metrics['cancelled_bookings']);
+          ?>
+          <div class="graph-column-group">
+            <div class="graph-pillar pillar-fill-user" style="height: <?= ($roles_metrics['users_count']/$max_val)*100 ?>%;">
+              <div class="pillar-tooltip">Users: <?= $roles_metrics['users_count'] ?></div>
+            </div>
+            <div class="graph-pillar pillar-fill-admin" style="height: <?= ($roles_metrics['admins_count']/$max_val)*100 ?>%;">
+              <div class="pillar-tooltip">Admins: <?= $roles_metrics['admins_count'] ?></div>
+            </div>
+          </div>
+          <div class="graph-column-group">
+            <div class="graph-pillar pillar-fill-pending" style="height: <?= ($bookings_metrics['pending_bookings']/$max_val)*100 ?>%;">
+              <div class="pillar-tooltip">Pending: <?= $bookings_metrics['pending_bookings'] ?></div>
+            </div>
+            <div class="graph-pillar pillar-fill-confirmed" style="height: <?= ($bookings_metrics['confirmed_bookings']/$max_val)*100 ?>%;">
+              <div class="pillar-tooltip">Confirmed: <?= $bookings_metrics['confirmed_bookings'] ?></div>
+            </div>
+            <div class="graph-pillar pillar-fill-cancelled" style="height: <?= ($bookings_metrics['cancelled_bookings']/$max_val)*100 ?>%;">
+              <div class="pillar-tooltip">Cancelled: <?= $bookings_metrics['cancelled_bookings'] ?></div>
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-around; margin-top: 15px; font-size: 11px; font-weight: 600; color: #64748b; text-align: center;">
+          <div style="flex: 1; max-width: 140px; display: flex; flex-direction: column; gap: 4px;">
+            <span style="color: #0f172a;">Account Deployments</span>
+            <small style="font-weight: 400; font-size: 10px;">(Joined Users vs Staff)</small>
+          </div>
+          <div style="flex: 1; max-width: 140px; display: flex; flex-direction: column; gap: 4px;">
+            <span style="color: #0f172a;">Operational Invoices</span>
+            <small style="font-weight: 400; font-size: 10px;">(Pending/Arrived/Voided)</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-box-container" style="display:flex; flex-direction:column; min-width:320px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0;">Reservation Calendar</h3>
+          <div style="display:flex; gap:5px;">
+            <button type="button" onclick="shiftCalendarMonth(-1)" style="padding:2px 8px; background:#1e293b; color:white; border:none; border-radius:4px; cursor:pointer;"><i class="fa-solid fa-chevron-left"></i></button>
+            <span id="calendar_month_year_label" style="font-size:13px; font-weight:700; min-width:85px; text-align:center; display:inline-block;"></span>
+            <button type="button" onclick="shiftCalendarMonth(1)" style="padding:2px 8px; background:#1e293b; color:white; border:none; border-radius:4px; cursor:pointer;"><i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(7, 1fr); gap:4px; text-align:center; font-size:11px; font-weight:700; color:#64748b; margin-bottom:5px;">
+          <div>Su</div><div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div>
+        </div>
+        <div id="calendar_days_grid_target" style="display:grid; grid-template-columns:repeat(7, 1fr); gap:4px; flex-grow:1;"></div>
+      </div>
+    </div>
+
+    <!-- Trend Analytics Matrix Container -->
+    <div class="chart-box-container" style="margin-top:20px; width:100%; position:relative; padding:20px; box-sizing:border-box;">
+      <h3 style="margin-top:0; margin-bottom:15px;">Transaction Performance & Occupancy Velocity Trend Matrix</h3>
+      <div style="position:relative; width:100%; height:220px; background:linear-gradient(to bottom, #f8fafc, #ffffff); border-radius:6px; border:1px solid #e2e8f0; overflow:hidden;" id="interactive_trend_canvas_container" onmousemove="trackTrendCursor(event)" onmouseleave="clearTrendTracking()">
+        
+        <div style="position:absolute; left:10px; top:10px; font-size:10px; color:#94a3b8; font-weight:600;">High Volume Peak</div>
+        <div style="position:absolute; left:10px; top:100px; font-size:10px; color:#cbd5e1; border-top:1px dashed #e2e8f0; width:calc(100% - 20px);"></div>
+        <div style="position:absolute; left:10px; bottom:10px; font-size:10px; color:#94a3b8; font-weight:600;">Baseline Equilibrium</div>
+        
+        <svg style="width:100%; height:100%; position:absolute; top:0; left:0; overflow:visible;" id="trend_svg_canvas"></svg>
+        <div id="trend_cursor_crosshair" style="position:absolute; top:0; bottom:0; width:1px; background:#3b82f6; display:none; pointer-events:none; z-index:10;"></div>
+        <div id="trend_chart_live_tooltip" style="position:absolute; display:none; background:rgba(15, 23, 42, 0.95); color:white; padding:10px 12px; border-radius:6px; font-size:11px; z-index:20; pointer-events:none; box-shadow:0 10px 15px -3px rgba(0,0,0,0.3); border:1px solid #334155; line-height:1.5; min-width:160px;"></div>
+      </div>
+      
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:15px; flex-wrap: wrap; gap: 15px;">
+        <div style="display:flex; gap:20px; font-size:11px; font-weight:600;">
+          <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:#10b981; border-radius:3px; display:inline-block;"></span>Upward Intake Value (Confirmed)</div>
+          <div style="display:flex; align-items:center; gap:6px;"><span style="width:12px; height:12px; background:#f43f5e; border-radius:3px; display:inline-block;"></span>Downward Outflow Volatility</div>
+        </div>
+        
+        <!-- Live Gross Revenue Total Card -->
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 16px; display: flex; align-items: center; gap: 12px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);">
+          <div style="background: #dcfce7; color: #16a34a; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px;">
+            <i class="fa-solid fa-wallet"></i>
+          </div>
+          <div>
+            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; font-weight: 700;">Total Verified Gross Revenue</div>
+            <div id="live_gross_revenue_counter" style="font-size: 18px; font-weight: 700; color: #0f172a;">₱0.00</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div id="panel_preservation" class="tab-panel-view <?= $active_tab === 'preservation' ? 'active-view' : '' ?>">
+    <header class="stage-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 35px;">
+      <h1>Reservations Ledger Panel</h1>
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <form method="POST" enctype="multipart/form-data" style="display: inline-flex; gap: 6px; align-items: center; background: white; padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1;">
+          <input type="file" name="xml_upload_file" accept=".xml" required style="font-size: 12px; max-width: 170px;">
+          <button type="submit" name="action_import_xml" class="control-btn btn-success" style="padding: 6px 12px; background-color: #10b981;">
+            <i class="fa-solid fa-file-import"></i> Import XML
+          </button>
+        </form>
+        <a href="admin_dashboard.php?action=export_xml" class="control-btn btn-primary" style="background-color: #1e293b; border: 1px solid #cbd5e1; color: white; padding: 10px 14px;">
+          <i class="fa-solid fa-file-export"></i> Export to XML
+        </a>
+      </div>
+    </header>
+    
+    <div class="table-card-wrapper">
+      <table class="data-ledger-table">
+        <thead>
+          <tr>
+            <th>Ref Number</th>
+            <th>Guest Name</th>
+            <th>Accommodation Target</th>
+            <th>Status</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($global_ledger as $b): ?>
+          <tr>
+            <td><strong><?= htmlspecialchars($b['booking_reference']) ?></strong></td>
+            <td><?= htmlspecialchars($b['guest_name']) ?></td>
+            <td><?= htmlspecialchars($b['room_type']) ?></td>
+            <td><span class="status-pill pill-<?= strtolower($b['booking_status']) ?>"><?= $b['booking_status'] ?></span></td>
+            <td style="text-align:right;">
+              <button class="control-btn btn-info" onclick='displayBookingDetails(<?= json_encode($b) ?>)'>Details</button>
+              <?php if ($b['booking_status'] === 'Pending'): ?>
+              <form method="POST" style="display:inline;">
+                <input type="hidden" name="booking_id" value="<?= $b['booking_id'] ?>">
+                <input type="hidden" name="status_value" value="Confirmed">
+                <button type="submit" name="update_status" class="control-btn btn-success">Approve</button>
+              </form>
+              <form method="POST" style="display:inline;">
+                <input type="hidden" name="booking_id" value="<?= $b['booking_id'] ?>">
+                <input type="hidden" name="status_value" value="Cancelled">
+                <button type="submit" name="update_status" class="control-btn btn-danger">Cancel</button>
+              </form>
+              <?php endif; ?>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  
+  <div id="panel_rooms" class="tab-panel-view <?= $active_tab === 'rooms' ? 'active-view' : '' ?>">
+    <header class="stage-header">
+      <h1>Hotel Inventory Manager</h1>
+      <button class="control-btn btn-primary" onclick="openRoomModal()"><i class="fa-solid fa-plus"></i> Initialize Room Type</button>
+    </header>
+    <div class="table-card-wrapper">
+      <table class="data-ledger-table">
+        <thead>
+          <tr>
+            <th>Visual</th>
+            <th>Room Number</th>
+            <th>Room Type Label</th>
+            <th>Price Per Night</th>
+            <th>Status</th>
+            <th style="text-align:right;">Modification Controls</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php 
+          foreach ($system_rooms_list as $room):
+            $img_src = !empty($room['image_url']) ? $room['image_url'] : 'https://images.unsplash.com/photo-1611892440504-42a792e24d32?q=80&w=200';
+          ?>
+          <tr>
+            <td><img src="<?= htmlspecialchars($img_src) ?>" style="width: 60px; height: 40px; object-fit: cover; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"></td>
+            <td><strong><?= htmlspecialchars($room['room_number']) ?></strong></td>
+            <td>
+              <?= htmlspecialchars($room['room_type']) ?><br>
+              <small style="color:#64748b; font-size:11px;"><?= htmlspecialchars(substr($room['description'] ?? 'No descriptions registered.', 0, 40)) ?>...</small>
+            </td>
+            <td><strong>₱<?= number_format($room['price_per_night'], 2) ?></strong></td>
+            <td><span class="status-pill pill-<?= strtolower(str_replace(' ', '_', $room['status'])) ?>"><?= $room['status'] ?></span></td>
+            <td style="text-align:right;">
+              <button class="control-btn btn-info" onclick='openRoomModal(<?= json_encode($room) ?>)'><i class="fa-solid fa-pen-to-square"></i> Edit</button>
+              <form method="POST" style="display:inline;" onsubmit="return confirm('WARNING: Permanent removal sequence of Room <?= htmlspecialchars($room['room_number']) ?>?');">
+                <input type="hidden" name="room_id" value="<?= $room['room_id'] ?>">
+                <button type="submit" name="delete_room" class="control-btn btn-danger"><i class="fa-solid fa-trash"></i> Delete</button>
+              </form>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  
+  <div id="panel_review" class="tab-panel-view <?= $active_tab === 'review' ? 'active-view' : '' ?>">
+    <header class="stage-header"><h1>Guest Feedback Matrix</h1></header>
+    <div class="reviews-panel-masonry">
+      <?php foreach ($admin_reviews_list as $rev): ?>
+      <div class="admin-review-card">
+        <div style="color:#eab308; margin-bottom:8px;">
+          <?php for($i=1; $i<=5; $i++) echo ($i <= $rev['rating']) ? '★' : '☆'; ?>
+        </div>
+        <p style="font-style:italic; font-size:14px; margin-bottom:12px;">"<?= htmlspecialchars($rev['review_text']) ?>"</p>
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#64748b;">
+          <div><strong><?= htmlspecialchars($rev['guest_name']) ?></strong></div>
+          <form method="POST" onsubmit="return confirm('Permanently drop feedback item?');" style="margin-left:auto;">
+            <input type="hidden" name="testimonial_id" value="<?= $rev['id'] ?>">
+            <button type="submit" name="delete_testimonial" class="control-btn btn-danger" style="padding:4px 8px; font-size:11px;">Purge</button>
+          </form>
+        </div>
+      </div>
+      <?php endforeach; ?>
+    </div>
+  </div>
  </main>
- 
+
  <div class="modal-overlay-backdrop" id="system_analytics_inspection_modal">
-     <div class="modal-box-frame" style="max-width: 520px;">
-         <h2 id="inspect_modal_title" style="margin-bottom: 6px; font-size: 18px; color: #0f172a;">Content Inventory Ledger</h2>
-         <p id="inspect_modal_desc" style="font-size: 13px; color: #64748b; margin-bottom: 16px;">System data collection subset snapshot.</p>
-         <div class="inspect-modal-list-box" id="inspect_modal_dynamic_content_target"></div>
-         <div style="display: flex; gap: 10px;">
-             <button id="inspect_modal_route_btn" class="control-btn btn-primary" style="flex: 1; justify-content: center;">Go to Master Ledger</button>
-             <button class="control-btn btn-info" style="flex: 1; justify-content: center;" onclick="closeModal('system_analytics_inspection_modal')">Close View</button>
-         </div>
-     </div>
+  <div class="modal-box-frame" style="max-width: 520px;">
+    <h2 id="inspect_modal_title" style="margin-bottom: 6px; font-size: 18px; color: #0f172a;">Content Inventory Ledger</h2>
+    <p id="inspect_modal_desc" style="font-size: 13px; color: #64748b; margin-bottom: 16px;">System data collection subset snapshot.</p>
+    <div class="inspect-modal-list-box" id="inspect_modal_dynamic_content_target"></div>
+    <div style="display: flex; gap: 10px;">
+      <button id="inspect_modal_route_btn" class="control-btn btn-primary" style="flex: 1; justify-content: center;">Go to Master Ledger</button>
+      <button class="control-btn btn-info" style="flex: 1; justify-content: center;" onclick="closeModal('system_analytics_inspection_modal')">Close View</button>
+    </div>
+  </div>
  </div>
- 
+
  <div class="modal-overlay-backdrop" id="global_booking_details_modal">
-     <div class="modal-box-frame">
-         <h2 id="m_ref_id" style="margin-bottom:16px;">BKG-CODE</h2>
-         <div style="font-size:14px; display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
-             <div><label style="color:#64748b; font-size:11px; display:block;">GUEST</label><span id="m_name"></span></div>
-             <div><label style="color:#64748b; font-size:11px; display:block;">EMAIL</label><span id="m_email"></span></div>
-             <div><label style="color:#64748b; font-size:11px; display:block;">PHONE</label><span id="m_phone"></span></div>
-             <div><label style="color:#64748b; font-size:11px; display:block;">RATE CHARGED</label><span id="m_total" style="color:#16a34a; font-weight:700;"></span></div>
-         </div>
-         <button class="control-btn btn-danger" style="width:100%; justify-content:center;" onclick="closeModal('global_booking_details_modal')">Dismiss View</button>
-     </div>
+  <div class="modal-box-frame">
+    <h2 id="m_ref_id" style="margin-bottom:16px;">BKG-CODE</h2>
+    <div style="font-size:14px; display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
+      <div><label style="color:#64748b; font-size:11px; display:block;">GUEST</label><span id="m_name"></span></div>
+      <div><label style="color:#64748b; font-size:11px; display:block;">EMAIL</label><span id="m_email"></span></div>
+      <div><label style="color:#64748b; font-size:11px; display:block;">PHONE</label><span id="m_phone"></span></div>
+      <div><label style="color:#64748b; font-size:11px; display:block;">RATE CHARGED</label><span id="m_total" style="color:#16a34a; font-weight:700;"></span></div>
+    </div>
+    <button class="control-btn btn-danger" style="width:100%; justify-content:center;" onclick="closeModal('global_booking_details_modal')">Dismiss View</button>
+  </div>
  </div>
- 
+
  <div class="modal-overlay-backdrop" id="room_editor_modal">
-     <div class="modal-box-frame" style="max-width:440px;">
-         <h2 id="room_modal_title" style="margin-bottom:20px;">Initialize Room Unit</h2>
-         <form method="POST" action="admin_dashboard.php">
-             <input type="hidden" name="room_id" id="form_room_id">
-             <div class="form-input-node">
-                 <label>Room Number *</label>
-                 <input type="text" name="room_number" id="form_room_number" required placeholder="e.g. 101">
-             </div>
-             <div class="form-input-node">
-                 <label>Room Type Class Label *</label>
-                 <input type="text" name="room_type" id="form_room_type" placeholder="e.g. Deluxe Suite" required>
-             </div>
-             <div class="form-input-node">
-                 <label>Base Operational Cost Per Night (₱) *</label>
-                 <input type="number" step="0.01" name="price_per_night" id="form_price_per_night" required>
-             </div>
-             <div class="form-input-node">
-                 <label>Inventory Operational Status *</label>
-                 <select name="room_status" id="form_room_status">
-                     <option value="Available">Available</option>
-                     <option value="Limited">Limited</option>
-                     <option value="Not Available">Not Available</option>
-                 </select>
-             </div>
-             <div class="form-input-node">
-                 <label>Room Features / Description Specification</label>
-                 <textarea name="description" id="form_description" rows="3"></textarea>
-             </div>
-             <div style="display:flex; gap:10px; margin-top:20px;">
-                 <button type="button" class="control-btn btn-info" style="flex:1; justify-content:center;" onclick="closeModal('room_editor_modal')">Cancel</button>
-                 <button type="submit" id="room_submit_action_btn" name="add_new_room" class="control-btn btn-success" style="flex:1; justify-content:center;">Save Unit Layout</button>
-             </div>
-         </form>
-     </div>
+  <div class="modal-box-frame" style="max-width:440px;">
+    <h2 id="room_modal_title" style="margin-bottom:20px;">Initialize Room Unit</h2>
+    <form method="POST" action="admin_dashboard.php">
+      <input type="hidden" name="room_id" id="form_room_id">
+      <div class="form-input-node">
+        <label>Room Number *</label>
+        <input type="text" name="room_number" id="form_room_number" required placeholder="e.g. 101">
+      </div>
+      <div class="form-input-node">
+        <label>Room Type Class Label *</label>
+        <input type="text" name="room_type" id="form_room_type" placeholder="e.g. Deluxe Suite" required>
+      </div>
+      <div class="form-input-node">
+        <label>Base Operational Cost Per Night (₱) *</label>
+        <input type="number" step="0.01" name="price_per_night" id="form_price_per_night" required>
+      </div>
+      <div class="form-input-node">
+        <label>Inventory Operational Status *</label>
+        <select name="room_status" id="form_room_status">
+          <option value="Available">Available</option>
+          <option value="Limited">Limited</option>
+          <option value="Not Available">Not Available</option>
+        </select>
+      </div>
+      <div class="form-input-node">
+        <label>Room Features / Description Specification</label>
+        <textarea name="description" id="form_description" rows="3"></textarea>
+      </div>
+      <div style="display:flex; gap:10px; margin-top:20px;">
+        <button type="button" class="control-btn btn-info" style="flex:1; justify-content:center;" onclick="closeModal('room_editor_modal')">Cancel</button>
+        <button type="submit" id="room_submit_action_btn" name="add_new_room" class="control-btn btn-success" style="flex:1; justify-content:center;">Save Unit Layout</button>
+      </div>
+    </form>
+  </div>
  </div>
- 
+
  <script>
- // JSON Encoding internal script datasets for localized modal parsing engine queries
  const globalUsersDataset = <?= json_encode($all_users_list); ?>;
  const globalBookingsDataset = <?= json_encode($global_ledger); ?>;
- 
+
  function switchTab(t) {
-     document.querySelectorAll('.tab-panel-view').forEach(p => p.classList.remove('active-view'));
-     document.querySelectorAll('.sidebar-menu li').forEach(l => l.classList.remove('active-tab'));
-     
-     document.getElementById('panel_' + t).classList.add('active-view');
-     const match = document.querySelector(`.sidebar-menu li[data-target="panel_${t}"]`);
-     if(match) match.classList.add('active-tab');
-     
-     window.history.replaceState(null, null, 'admin_dashboard.php?tab=' + t);
+  document.querySelectorAll('.tab-panel-view').forEach(p => p.classList.remove('active-view'));
+  document.querySelectorAll('.sidebar-menu li').forEach(l => l.classList.remove('active-tab'));
+  document.getElementById('panel_' + t).classList.add('active-view');
+  const match = document.querySelector(`.sidebar-menu li[data-target="panel_${t}"]`);
+  if(match) match.classList.add('active-tab');
+  window.history.replaceState(null, null, 'admin_dashboard.php?tab=' + t);
  }
- 
+
  function openSystemInspectionView(metricKey) {
-     const titleNode = document.getElementById('inspect_modal_title');
-     const descNode = document.getElementById('inspect_modal_desc');
-     const targetNode = document.getElementById('inspect_modal_dynamic_content_target');
-     const routeBtn = document.getElementById('inspect_modal_route_btn');
-     
-     targetNode.innerHTML = "";
-     let collectionHTML = "";
-     
-     if (metricKey === 'active_users' || metricKey === 'admin_staff') {
-         const targetRole = (metricKey === 'active_users') ? 'user' : 'admin';
-         titleNode.innerText = (metricKey === 'active_users') ? "Active Registered Guest Accounts" : "System Administrative Staff Profiles";
-         descNode.innerText = "Viewing registered entities sorted by registration entry date.";
-         
-         const filteredUsers = globalUsersDataset.filter(u => u.role === targetRole);
-         if(filteredUsers.length === 0) {
-             collectionHTML = `<div class='inspect-list-item' style='color:#64748b;'>No verified accounts tracked in this role directory.</div>`;
-         } else {
-             filteredUsers.forEach(u => {
-                 collectionHTML += `
-                 <div class='inspect-list-item'>
-                     <div>
-                         <strong>${u.first_name} ${u.last_name}</strong><br>
-                         <small style='color:#64748b;'>${u.user_email}</small>
-                     </div>
-                     <div style='font-size:11px; color:#94a3b8;'>Joined: ${u.created_at ? u.created_at.substring(0,10) : 'N/A'}</div>
-                 </div>`;
-             });
-         }
-         routeBtn.style.display = "none";
-     } else {
-         // Bookings Ledger Filtering Matrix
-         routeBtn.style.display = "inline-flex";
-         routeBtn.onclick = function() {
-             closeModal('system_analytics_inspection_modal');
-             switchTab('preservation');
-         };
-         
-         let filteredInvoices = globalBookingsDataset;
-         
-         if(metricKey === 'bookings') {
-             titleNode.innerText = "Complete Operational Reservation Manifest";
-             descNode.innerText = "Overview logs of all system-wide reservation entries.";
-         } else if(metricKey === 'pendings') {
-             titleNode.innerText = "Awaiting Verification: Pending Vouchers";
-             descNode.innerText = "Reservations flagged as Pending waiting management response.";
-             filteredInvoices = globalBookingsDataset.filter(b => b.booking_status === 'Pending');
-         } else if(metricKey === 'canceled') {
-             titleNode.innerText = "Voided Logs: Cancelled Reservations";
-             descNode.innerText = "Reservations processed as Cancelled or inactive slates.";
-             filteredInvoices = globalBookingsDataset.filter(b => b.booking_status === 'Cancelled');
-         }
-         
-         if(filteredInvoices.length === 0) {
-             collectionHTML = `<div class='inspect-list-item' style='color:#64748b;'>No localized matched bookings records detected.</div>`;
-         } else {
-             filteredInvoices.forEach(b => {
-                 collectionHTML += `
-                 <div class='inspect-list-item'>
-                     <div>
-                         <strong>${b.booking_reference}</strong> - <small>${b.guest_name}</small><br>
-                         <small style='color:#c69c4f; font-weight:600;'>${b.room_type}</small>
-                     </div>
-                     <div style='text-align:right;'>
-                         <span class='status-pill pill-${b.booking_status.toLowerCase()}'>${b.booking_status}</span>
-                     </div>
-                 </div>`;
-             });
-         }
-     }
-     
-     targetNode.innerHTML = collectionHTML;
-     document.getElementById('system_analytics_inspection_modal').classList.add('active-modal');
+  const titleNode = document.getElementById('inspect_modal_title');
+  const descNode = document.getElementById('inspect_modal_desc');
+  const targetNode = document.getElementById('inspect_modal_dynamic_content_target');
+  const routeBtn = document.getElementById('inspect_modal_route_btn');
+  
+  targetNode.innerHTML = "";
+  let collectionHTML = "";
+
+  if (metricKey === 'active_users' || metricKey === 'admin_staff') {
+    const targetRole = (metricKey === 'active_users') ? 'user' : 'admin';
+    titleNode.innerText = (metricKey === 'active_users') ? "Active Registered Guest Accounts" : "System Administrative Staff Profiles";
+    descNode.innerText = "Viewing registered entities sorted by registration entry date.";
+    
+    const filteredUsers = globalUsersDataset.filter(u => u.role === targetRole);
+    if(filteredUsers.length === 0) {
+      collectionHTML = `<div class='inspect-list-item' style='color:#64748b;'>No verified accounts tracked in this role directory.</div>`;
+    } else {
+      filteredUsers.forEach(u => {
+        collectionHTML += `
+        <div class='inspect-list-item'>
+          <div><strong>${u.first_name} ${u.last_name}</strong><br><small style='color:#64748b;'>${u.user_email}</small></div>
+          <div style='font-size:11px; color:#94a3b8;'>Joined: ${u.created_at ? u.created_at.substring(0,10) : 'N/A'}</div>
+        </div>`;
+      });
+    }
+    routeBtn.style.display = "none";
+  } else {
+    routeBtn.style.display = "inline-flex";
+    routeBtn.onclick = function() {
+      closeModal('system_analytics_inspection_modal');
+      switchTab('preservation');
+    };
+    
+    let filteredInvoices = globalBookingsDataset;
+    if(metricKey === 'bookings') {
+      titleNode.innerText = "Complete Operational Reservation Manifest";
+      descNode.innerText = "Overview logs of all system-wide reservation entries.";
+    } else if(metricKey === 'pendings') {
+      titleNode.innerText = "Awaiting Verification: Pending Vouchers";
+      descNode.innerText = "Reservations flagged as Pending waiting management response.";
+      filteredInvoices = globalBookingsDataset.filter(b => b.booking_status === 'Pending');
+    } else if(metricKey === 'cancelled' || metricKey === 'canceled') {
+      titleNode.innerText = "Voided Logs: Cancelled Reservations";
+      descNode.innerText = "Reservations processed as Cancelled or inactive slates.";
+      filteredInvoices = globalBookingsDataset.filter(b => b.booking_status === 'Cancelled');
+    }
+    
+    if(filteredInvoices.length === 0) {
+      collectionHTML = `<div class='inspect-list-item' style='color:#64748b;'>No localized matched bookings records detected.</div>`;
+    } else {
+      filteredInvoices.forEach(b => {
+        collectionHTML += `
+        <div class='inspect-list-item'>
+          <div><strong>${b.booking_reference}</strong> - <small>${b.guest_name}</small><br><small style='color:#c69c4f; font-weight:600;'>${b.room_type}</small></div>
+          <div style='text-align:right;'><span class='status-pill pill-${b.booking_status.toLowerCase()}'>${b.booking_status}</span></div>
+        </div>`;
+      });
+    }
+  }
+  
+  targetNode.innerHTML = collectionHTML;
+  document.getElementById('system_analytics_inspection_modal').classList.add('active-modal');
  }
- 
+
  function displayBookingDetails(data) {
-     document.getElementById('m_ref_id').innerText = data.booking_reference;
-     document.getElementById('m_name').innerText = data.guest_name;
-     document.getElementById('m_email').innerText = data.guest_email ?? 'N/A';
-     document.getElementById('m_phone').innerText = data.guest_phone ?? 'N/A';
-     document.getElementById('m_total').innerText = "₱" + parseFloat(data.total_price).toLocaleString(undefined, {minimumFractionDigits: 2});
-     
-     document.getElementById('global_booking_details_modal').classList.add('active-modal');
+  document.getElementById('m_ref_id').innerText = data.booking_reference;
+  document.getElementById('m_name').innerText = data.guest_name;
+  document.getElementById('m_email').innerText = data.guest_email ?? 'N/A';
+  document.getElementById('m_phone').innerText = data.guest_phone ?? 'N/A';
+  document.getElementById('m_total').innerText = "₱" + parseFloat(data.total_price).toLocaleString(undefined, {minimumFractionDigits: 2});
+  document.getElementById('global_booking_details_modal').classList.add('active-modal');
  }
- 
+
  function openRoomModal(room = null) {
-     const title = document.getElementById('room_modal_title');
-     const btn = document.getElementById('room_submit_action_btn');
-     
-     if(room) {
-         title.innerText = "Modify Room Parameters";
-         btn.name = "edit_existing_room";
-         btn.innerText = "Commit Modifications";
-         document.getElementById('form_room_id').value = room.room_id;
-         document.getElementById('form_room_number').value = room.room_number;
-         document.getElementById('form_room_type').value = room.room_type;
-         document.getElementById('form_price_per_night').value = room.price_per_night;
-         document.getElementById('form_room_status').value = room.status;
-         document.getElementById('form_description').value = room.description ?? "";
-     } else {
-         title.innerText = "Initialize New Room Unit";
-         btn.name = "add_new_room";
-         btn.innerText = "Deploy Inventory";
-         document.getElementById('form_room_id').value = "";
-         document.getElementById('form_room_number').value = "";
-         document.getElementById('form_room_type').value = "";
-         document.getElementById('form_price_per_night').value = "";
-         document.getElementById('form_room_status').value = "Available";
-         document.getElementById('form_description').value = "";
-     }
-     
-     document.getElementById('room_editor_modal').classList.add('active-modal');
+  const title = document.getElementById('room_modal_title');
+  const btn = document.getElementById('room_submit_action_btn');
+  
+  if(room) {
+    title.innerText = "Modify Room Parameters";
+    btn.name = "edit_existing_room";
+    btn.innerText = "Commit Modifications";
+    document.getElementById('form_room_id').value = room.room_id;
+    document.getElementById('form_room_number').value = room.room_number;
+    document.getElementById('form_room_type').value = room.room_type;
+    document.getElementById('form_price_per_night').value = room.price_per_night;
+    document.getElementById('form_room_status').value = room.status;
+    document.getElementById('form_description').value = room.description ?? "";
+  } else {
+    title.innerText = "Initialize New Room Unit";
+    btn.name = "add_new_room";
+    btn.innerText = "Deploy Inventory";
+    document.getElementById('form_room_id').value = "";
+    document.getElementById('form_room_number').value = "";
+    document.getElementById('form_room_type').value = "";
+    document.getElementById('form_price_per_night').value = "";
+    document.getElementById('form_room_status').value = "Available";
+    document.getElementById('form_description').value = "";
+  }
+  document.getElementById('room_editor_modal').classList.add('active-modal');
  }
- 
+
  function closeModal(id) {
-     document.getElementById(id).classList.remove('active-modal');
+  document.getElementById(id).classList.remove('active-modal');
  }
+
+ // --- REGISTRY: DYNAMIC ANNUAL CALENDAR ENGINE ---
+ let calendarActiveDate = new Date();
+
+ function initializeCalendarRenderer() {
+  const gridTarget = document.getElementById('calendar_days_grid_target');
+  const labelTarget = document.getElementById('calendar_month_year_label');
+  if (!gridTarget || !labelTarget) return;
+
+  gridTarget.innerHTML = "";
+  const year = calendarActiveDate.getFullYear();
+  const month = calendarActiveDate.getMonth();
+
+  const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  labelTarget.innerText = `${monthNames[month]} ${year}`;
+
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+
+  for (let i = 0; i < firstDayIndex; i++) {
+    const space = document.createElement('div');
+    space.style.background = "#f8fafc";
+    space.style.borderRadius = "4px";
+    gridTarget.appendChild(space);
+  }
+
+  for (let day = 1; day <= totalDaysInMonth; day++) {
+    const dayBox = document.createElement('div');
+    dayBox.style.position = "relative";
+    dayBox.style.background = "#ffffff";
+    dayBox.style.border = "1px solid #f1f5f9";
+    dayBox.style.borderRadius = "4px";
+    dayBox.style.minHeight = "38px";
+    dayBox.style.display = "flex";
+    dayBox.style.flexDirection = "column";
+    dayBox.style.justifyContent = "space-between";
+    dayBox.style.padding = "2px";
+    dayBox.style.boxSizing = "border-box";
+
+    const dayNumberLabel = document.createElement('span');
+    dayNumberLabel.innerText = day;
+    dayNumberLabel.style.fontSize = "10px";
+    dayNumberLabel.style.fontWeight = "600";
+    dayNumberLabel.style.color = "#475569";
+    dayBox.appendChild(dayNumberLabel);
+
+    const evaluationDateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    
+    const activeMatches = globalBookingsDataset.filter(b => {
+      if (b.booking_status !== 'Confirmed') return false;
+      if (!b.check_in_date) return false;
+      return b.check_in_date.substring(0, 10) === evaluationDateString;
+    });
+
+    if (activeMatches.length > 0) {
+      dayBox.style.background = "#f0fdf4";
+      dayBox.style.borderColor = "#bbf7d0";
+      dayBox.style.cursor = "pointer";
+      dayBox.title = `${activeMatches.length} Confirmed Bookings`;
+
+      const visualIndicatorMarker = document.createElement('div');
+      visualIndicatorMarker.style.width = "100%";
+      visualIndicatorMarker.style.height = "14px";
+      visualIndicatorMarker.style.background = "#10b981";
+      visualIndicatorMarker.style.color = "white";
+      visualIndicatorMarker.style.fontSize = "9px";
+      visualIndicatorMarker.style.fontWeight = "700";
+      visualIndicatorMarker.style.textAlign = "center";
+      visualIndicatorMarker.style.borderRadius = "2px";
+      visualIndicatorMarker.style.lineHeight = "14px";
+      visualIndicatorMarker.innerText = `+${activeMatches.length}`;
+      
+      dayBox.onclick = () => { openSystemInspectionView('bookings'); };
+      dayBox.appendChild(visualIndicatorMarker);
+    }
+    gridTarget.appendChild(dayBox);
+  }
+ }
+
+ function shiftCalendarMonth(directionOffset) {
+  calendarActiveDate.setMonth(calendarActiveDate.getMonth() + directionOffset);
+  initializeCalendarRenderer();
+ }
+
+ // --- REGISTRY: HOVER CURSOR TRACKED UP/DOWN TREND GRAPH & REVENUE CALCULATION ---
+ let trendTimelinePointsCache = [];
+
+ function compileAnalyticalTrendDataset() {
+  const aggregationMap = {};
+  let absoluteGrossRevenueTotal = 0;
+  
+  // Create timeline window context frame for analytical mapping
+  for (let d = 15; d <= 31; d++) {
+    aggregationMap[`2026-05-${d}`] = { confirmedCount: 0, nonConfirmedCount: 0, grossValue: 0 };
+  }
+
+  globalBookingsDataset.forEach(booking => {
+    // Increment absolute ledger metrics if confirmation bit matches
+    if (booking.booking_status === 'Confirmed') {
+      absoluteGrossRevenueTotal += parseFloat(booking.total_price || 0);
+    }
+
+    if (!booking.check_in_date) return;
+    const dayKey = booking.check_in_date.substring(0, 10);
+    if (aggregationMap[dayKey]) {
+      if (booking.booking_status === 'Confirmed') {
+        aggregationMap[dayKey].confirmedCount++;
+        aggregationMap[dayKey].grossValue += parseFloat(booking.total_price || 0);
+      } else {
+        aggregationMap[dayKey].nonConfirmedCount++;
+      }
+    }
+  });
+
+  // Update HTML layout card component target context instantly
+  const revenueDisplayNode = document.getElementById('live_gross_revenue_counter');
+  if (revenueDisplayNode) {
+    revenueDisplayNode.innerText = "₱" + absoluteGrossRevenueTotal.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+
+  trendTimelinePointsCache = Object.keys(aggregationMap).sort().map(key => {
+    const parts = key.split('-');
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const textLabel = `${months[parseInt(parts[1]) - 1]} ${parts[2]}, ${parts[0]}`;
+    return {
+      dateKey: key,
+      label: textLabel,
+      upValue: aggregationMap[key].confirmedCount,
+      downValue: aggregationMap[key].nonConfirmedCount,
+      cashFlow: aggregationMap[key].grossValue
+    };
+  });
+ }
+
+ function drawTrendSVGArchitecture() {
+  const svg = document.getElementById('trend_svg_canvas');
+  if (!svg) return;
+  
+  const width = svg.clientWidth || 700;
+  const height = svg.clientHeight || 220;
+  svg.innerHTML = "";
+
+  if (trendTimelinePointsCache.length === 0) return;
+
+  const paddedWidth = width - 40;
+  const horizontalStep = paddedWidth / (trendTimelinePointsCache.length - 1);
+  
+  let maxMetricBound = 1;
+  trendTimelinePointsCache.forEach(pt => {
+    if (pt.upValue > maxMetricBound) maxMetricBound = pt.upValue;
+    if (pt.downValue > maxMetricBound) maxMetricBound = pt.downValue;
+  });
+  maxMetricBound = Math.ceil(maxMetricBound * 1.2);
+
+  let upPathCoords = "";
+  let downPathCoords = "";
+
+  trendTimelinePointsCache.forEach((pt, index) => {
+    const xCoord = 20 + (index * horizontalStep);
+    const yUpCoord = height - 30 - ((pt.upValue / maxMetricBound) * (height - 60));
+    const yDownCoord = height - 30 - ((pt.downValue / maxMetricBound) * (height - 60));
+
+    pt.computedX = xCoord;
+    pt.computedYUp = yUpCoord;
+    pt.computedYDown = yDownCoord;
+
+    upPathCoords += `${index === 0 ? 'M' : 'L'} ${xCoord} ${yUpCoord} `;
+    downPathCoords += `${index === 0 ? 'M' : 'L'} ${xCoord} ${yDownCoord} `;
+
+    const upAnchorCircle = `<circle cx="${xCoord}" cy="${yUpCoord}" r="3.5" fill="#10b981" stroke="#ffffff" stroke-width="1"/>`;
+    const downAnchorCircle = `<circle cx="${xCoord}" cy="${yDownCoord}" r="3.5" fill="#f43f5e" stroke="#ffffff" stroke-width="1"/>`;
+    svg.innerHTML += upAnchorCircle + downAnchorCircle;
+  });
+
+  const upLineStroke = `<path d="${upPathCoords}" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const downLineStroke = `<path d="${downPathCoords}" fill="none" stroke="#f43f5e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  
+  svg.innerHTML = upLineStroke + downLineStroke + svg.innerHTML;
+ }
+
+ function trackTrendCursor(event) {
+  const container = document.getElementById('interactive_trend_canvas_container');
+  const crosshair = document.getElementById('trend_cursor_crosshair');
+  const tooltip = document.getElementById('trend_chart_live_tooltip');
+  if (!container || !crosshair || !tooltip || trendTimelinePointsCache.length === 0) return;
+
+  const rect = container.getBoundingClientRect();
+  const currentCursorX = event.clientX - rect.left;
+
+  let targetedNode = trendTimelinePointsCache[0];
+  let minimumDelta = Math.abs(currentCursorX - targetedNode.computedX);
+
+  trendTimelinePointsCache.forEach(pt => {
+    const delta = Math.abs(currentCursorX - pt.computedX);
+    if (delta < minimumDelta) {
+      minimumDelta = delta;
+      targetedNode = pt;
+    }
+  });
+
+  crosshair.style.left = `${targetedNode.computedX}px`;
+  crosshair.style.display = "block";
+
+  tooltip.innerHTML = `
+    <div style="font-weight:700; color:#94a3b8; margin-bottom:4px; border-bottom:1px solid #475569; padding-bottom:2px;">${targetedNode.label}</div>
+    <div style="display:flex; justify-content:space-between; gap:15px; margin-top:2px;">
+      <span><i class="fa-solid fa-circle-check" style="color:#10b981;"></i> Confirmed (Up):</span>
+      <strong style="color:#10b981;">+${targetedNode.upValue} Recs</strong>
+    </div>
+    <div style="display:flex; justify-content:space-between; gap:15px;">
+      <span><i class="fa-solid fa-circle-minus" style="color:#f43f5e;"></i> Cancelled/Pending (Down):</span>
+      <strong style="color:#f43f5e;">${targetedNode.downValue} Recs</strong>
+    </div>
+    <div style="display:flex; justify-content:space-between; gap:15px; margin-top:4px; border-top:1px dashed #334155; padding-top:2px; font-weight:700;">
+      <span>Revenue Output:</span>
+      <span style="color:#3b82f6;">₱${targetedNode.cashFlow.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+    </div>
+  `;
+
+  tooltip.style.display = "block";
+  const tooltipWidth = tooltip.clientWidth || 160;
+  const leftPlacementPos = (targetedNode.computedX + tooltipWidth + 30 > rect.width) ? (targetedNode.computedX - tooltipWidth - 15) : (targetedNode.computedX + 15);
+  tooltip.style.left = `${leftPlacementPos}px`;
+  tooltip.style.top = `30px`;
+ }
+
+ function clearTrendTracking() {
+  const crosshair = document.getElementById('trend_cursor_crosshair');
+  const tooltip = document.getElementById('trend_chart_live_tooltip');
+  if (crosshair) crosshair.style.display = "none";
+  if (tooltip) tooltip.style.display = "none";
+ }
+
+ document.addEventListener("DOMContentLoaded", () => {
+  initializeCalendarRenderer();
+  compileAnalyticalTrendDataset();
+  drawTrendSVGArchitecture();
+  window.addEventListener("resize", drawTrendSVGArchitecture);
+ });
  </script>
 </body>
 </html>
