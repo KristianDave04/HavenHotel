@@ -90,3 +90,11 @@ CREATE TABLE IF NOT EXISTS `testimonials` (
         FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) 
         ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+------------------------------------------------------------------------------------------------------------------------------------------
+
+In order to sign-up in admin side
+
+ADMIN KEY: HAVEN_ADMIN_2026
+
+------------------------------------------------------------------------------------------------------------------------------------------
