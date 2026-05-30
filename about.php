@@ -259,25 +259,6 @@ $user_name    = $is_logged_in ? ($_SESSION['user_name'] ?? 'Guest') : '';
             to provide a truly luxurious experience.
         </p>
 
-        <div class="stats">
-
-            <div class="stat-box">
-                <h3>15+</h3>
-                <p>Years Experience</p>
-            </div>
-
-            <div class="stat-box">
-                <h3>5★</h3>
-                <p>Luxury Rating</p>
-            </div>
-
-            <div class="stat-box">
-                <h3>10K+</h3>
-                <p>Happy Guests</p>
-            </div>
-
-        </div>
-
     </div>
 
 </section>
