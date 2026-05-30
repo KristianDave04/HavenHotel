@@ -693,8 +693,5 @@ if(isset($_POST['book_now'])){
 </script>
 
 </body>
- </html>
-<?php $conn->close(); ?>
-
 </html>
 <?php $conn->close(); ?>
