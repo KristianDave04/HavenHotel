@@ -12,6 +12,157 @@ if ($conn->connect_error) {
     die("Database Connection Error: " . $conn->connect_error);
 }
 
+// ========================================================
+// ADVANCED CONFIGURATION: XML DOM EXPORT ENGINE PIPELINE
+// ========================================================
+if (isset($_GET['action']) && $_GET['action'] === 'export_xml') {
+    // Clear any active layout output buffers to ensure valid data transmission
+    if (ob_get_length()) ob_end_clean();
+
+    // Initialize PHP Native DOMDocument Utility
+    $dom = new DOMDocument('1.0', 'UTF-8');
+    $dom->formatOutput = true; // Inject clean spacing and indentation formatting
+
+    // Initialize Root Node based on your specific layout: <havenhotel>
+    $root = $dom->createElement('havenhotel');
+    $dom->appendChild($root);
+
+    // Fetch relational reservation records matching the active workspace ledger layout
+    $export_query = $conn->query("SELECT b.*, CONCAT(u.first_name, ' ', u.last_name) AS guest_name, u.user_email AS guest_email, u.phone AS guest_phone FROM bookings b LEFT JOIN users u ON b.user_id = u.id ORDER BY b.created_at DESC");
+
+    if ($export_query) {
+        while ($b = $export_query->fetch_assoc()) {
+            // Append record structural block node container: <reservation>
+            $reservationNode = $dom->createElement('reservation');
+            $root->appendChild($reservationNode);
+
+            // Construct element nodes mapping perfectly to your exact requested tags
+            $reservationNode->appendChild($dom->createElement('id', $b['booking_id']));
+            $reservationNode->appendChild($dom->createElement('reference_number', htmlspecialchars($b['booking_reference'])));
+            $reservationNode->appendChild($dom->createElement('name', htmlspecialchars($b['guest_name'])));
+            $reservationNode->appendChild($dom->createElement('email', htmlspecialchars($b['guest_email'] ?? 'N/A')));
+            $reservationNode->appendChild($dom->createElement('phone', htmlspecialchars($b['guest_phone'] ?? 'N/A')));
+            $reservationNode->appendChild($dom->createElement('type', htmlspecialchars($b['room_type'])));
+            $reservationNode->appendChild($dom->createElement('check_in', $b['check_in_date']));
+            $reservationNode->appendChild($dom->createElement('check_out', $b['check_out_date']));
+            $reservationNode->appendChild($dom->createElement('price', $b['total_price']));
+            $reservationNode->appendChild($dom->createElement('status', $b['booking_status']));
+            
+            $requests = !empty($b['special_requests']) ? $b['special_requests'] : 'None';
+            $reservationNode->appendChild($dom->createElement('special_request', htmlspecialchars($requests)));
+        }
+    }
+
+    // Direct stream configuration download response headers
+    header('Content-Type: application/xml; charset=utf-8');
+    header('Content-Disposition: attachment; filename="haven_hotel_bookings_' . date('Y-m-d') . '.xml"');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
+    // Print generated string architecture out and exit compiler immediately
+    echo $dom->saveXML();
+    exit();
+}
+
+// ========================================================
+// DATABASE PIPELINE: PARSE AND SYNC IMPORTED XML RECORDS
+// ========================================================
+if (isset($_POST['action_import_xml']) && isset($_FILES['xml_upload_file'])) {
+    if ($_FILES['xml_upload_file']['error'] === UPLOAD_ERR_OK) {
+        $file_path = $_FILES['xml_upload_file']['tmp_name'];
+        
+        libxml_use_internal_errors(true);
+        $xml = simplexml_load_file($file_path);
+        
+        if ($xml !== false) {
+            if ($xml->getName() === 'havenhotel') {
+                $imported_count = 0;
+                
+                // --- USER FOREIGN KEY SAFEGUARD ---
+                $fallback_user_lookup = $conn->query("SELECT id FROM users LIMIT 1");
+                if ($fallback_user_lookup && $fallback_user_lookup->num_rows > 0) {
+                    $fallback_row = $fallback_user_lookup->fetch_assoc();
+                    $user_id_fallback = (int)$fallback_row['id'];
+                } else {
+                    $conn->query("INSERT INTO users (id, first_name, last_name, role) VALUES (1, 'System', 'Import', 'admin')");
+                    $user_id_fallback = 1;
+                }
+                
+                foreach ($xml->reservation as $res) {
+                    $ref_num      = (string)$res->reference_number;
+                    $guest_name   = (string)$res->name;
+                    $room_type    = (string)$res->type; 
+                    $check_in     = (string)$res->check_in;
+                    $check_out    = (string)$res->check_out;
+                    $total_price  = (float)$res->price;
+                    $status       = (string)$res->status;
+                    $spec_request = (string)$res->special_request;
+
+                    // --- ROOM FOREIGN KEY SAFEGUARD ---
+                    $room_stmt = $conn->prepare("SELECT room_id FROM rooms WHERE room_type = ? LIMIT 1");
+                    $room_stmt->bind_param("s", $room_type);
+                    $room_stmt->execute();
+                    
+                    // FIX: Fetch the result exactly ONCE to prevent sync pipeline blocks
+                    $room_res = $room_stmt->get_result();
+                    
+                    if ($room_res && $room_res->num_rows > 0) {
+                        $room_row = $room_res->fetch_assoc();
+                        $room_id_resolved = (int)$room_row['room_id'];
+                    } else {
+                        // Fallback: If no direct text match, assign to the first available room
+                        $fallback_room_lookup = $conn->query("SELECT room_id FROM rooms LIMIT 1");
+                        if ($fallback_room_lookup && $fallback_room_lookup->num_rows > 0) {
+                            $f_room = $fallback_room_lookup->fetch_assoc();
+                            $room_id_resolved = (int)$f_room['room_id'];
+                        } else {
+                            // Emergency Fallback if table is completely empty
+                            $conn->query("INSERT INTO rooms (room_number, room_type, price_per_night, status) VALUES ('101', 'Standard Room', 3500.00, 'Available')");
+                            $room_id_resolved = $conn->insert_id;
+                        }
+                    }
+                    $room_stmt->close();
+                    // -------------------------------------
+
+                    // Step B: Check if reference number already exists inside phpMyAdmin bookings table
+                    $check_stmt = $conn->prepare("SELECT booking_id FROM bookings WHERE booking_reference = ?");
+                    $check_stmt->bind_param("s", $ref_num);
+                    $check_stmt->execute();
+                    $check_res = $check_stmt->get_result();
+                    
+                    if ($check_res->num_rows > 0) {
+                        // Data Sync Patch: Update existing ledger matching reference code
+                        $update_stmt = $conn->prepare("UPDATE bookings SET room_id = ?, room_type = ?, check_in_date = ?, check_out_date = ?, total_price = ?, booking_status = ?, special_requests = ? WHERE booking_reference = ?");
+                        $update_stmt->bind_param("isssssss", $room_id_resolved, $room_type, $check_in, $check_out, $total_price, $status, $spec_request, $ref_num);
+                        $update_stmt->execute();
+                        $update_stmt->close();
+                    } else {
+                        // Data Insertion: Inject brand new data row using validated user_id and room_id references
+                        $insert_stmt = $conn->prepare("INSERT INTO bookings (user_id, room_id, booking_reference, room_type, check_in_date, check_out_date, total_price, booking_status, special_requests) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                        $insert_stmt->bind_param("iisssssss", $user_id_fallback, $room_id_resolved, $ref_num, $room_type, $check_in, $check_out, $total_price, $status, $spec_request);
+                        $insert_stmt->execute();
+                        $insert_stmt->close();
+                    }
+                    $check_stmt->close();
+                    $imported_count++;
+                }
+                
+                $msg = "XML Import System Event: Processed and synchronized " . $imported_count . " entries to the local repository.";
+                $notif = $conn->prepare("INSERT INTO notifications (message) VALUES (?)");
+                $notif->bind_param("s", $msg);
+                $notif->execute();
+                $notif->close();
+                
+                header("Location: admin_dashboard.php?tab=preservation&import_success=" . $imported_count);
+                exit();
+            }
+        }
+        libxml_clear_errors();
+    }
+    header("Location: admin_dashboard.php?tab=preservation&import_error=1");
+    exit();
+}
 // MASTER IMAGE POOL: 20 High-Quality Room Visuals
 $room_image_pool = [
     "https://images.unsplash.com/photo-1611892440504-42a792e24d32?q=80&w=600&auto=format&fit=crop",
@@ -293,7 +444,24 @@ $active_tab = $_GET['tab'] ?? 'home';
      </div>
      
      <div id="panel_preservation" class="tab-panel-view <?= $active_tab === 'preservation' ? 'active-view' : '' ?>">
-         <header class="stage-header"><h1>Reservations Ledger Panel</h1></header>
+         <header class="stage-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 35px;">
+             <h1>Reservations Ledger Panel</h1>
+             
+             <div style="display: flex; gap: 10px; align-items: center;">
+                 
+                 <form method="POST" enctype="multipart/form-data" style="display: inline-flex; gap: 6px; align-items: center; background: white; padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                     <input type="file" name="xml_upload_file" accept=".xml" required style="font-size: 12px; max-width: 170px;">
+                     <button type="submit" name="action_import_xml" class="control-btn btn-success" style="padding: 6px 12px; background-color: #10b981;">
+                         <i class="fa-solid fa-file-import"></i> Import XML
+                     </button>
+                 </form>
+
+                 <a href="admin_dashboard.php?action=export_xml" class="control-btn btn-primary" style="background-color: #1e293b; border: 1px solid #cbd5e1; color: white; padding: 10px 14px;">
+                     <i class="fa-solid fa-file-export"></i> Export to XML
+                 </a>
+             </div>
+         </header>
+         
          <div class="table-card-wrapper">
              <table class="data-ledger-table">
                  <thead>
