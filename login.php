@@ -1,55 +1,41 @@
 <?php
+// login.php
 session_start();
 
-// Database Connection Settings
-$host = "localhost";
-$db_user = "root";
-$db_pass = "";
-$db_name = "haven_hotel";
-
-$conn = new mysqli($host, $db_user, $db_pass, $db_name);
-if ($conn->connect_error) {
-    die("Database Connection Failed: " . $conn->connect_error);
-}
+require_once 'classes/Database.php';
+require_once 'classes/User.php';
 
 $error = "";
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $database = new Database();
+    $dbConn = $database->getConnection();
+    $userEngine = new User($dbConn);
+
     $email = trim(filter_var($_POST['email'], FILTER_SANITIZE_EMAIL));
     $password = $_POST['password'];
 
     if (empty($email) || empty($password)) {
         $error = "Please enter both email and password.";
     } else {
-        // Look up the user by email
-        $stmt = $conn->prepare("SELECT id, first_name, last_name, password, membership_tier FROM users WHERE user_email = ?");
-        $stmt->bind_param("s", $email);
-        $stmt->execute();
-        $result = $stmt->get_result();
+        // Authenticate with user object layer method loop context
+        $loginResult = $userEngine->login($email, $password);
 
-        if ($result->num_rows === 1) {
-            $user = $result->fetch_assoc();
-            
-            // Verify the encrypted password match
-            if (password_verify($password, $user['password'])) {
-                // Set session variables
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['user_name'] = $user['first_name'] . ' ' . $user['last_name'];
-                $_SESSION['membership_tier'] = $user['membership_tier'];
-
-                // Redirect straight to dashboard/index
-                header("Location: dashboard.php");
-                exit();
+        if ($loginResult !== false && $loginResult['status'] === true) {
+            // Evaluates role parameter output values to guide view dashboard endpoints
+            if ($loginResult['role'] === 'Admin') {
+                header("Location: admin_dashboard.php");
             } else {
-                $error = "Incorrect password. Please try again.";
+                header("Location: dashboard.php");
             }
+            exit();
         } else {
-            $error = "No account found with that email address.";
+            $error = "Access Denied: Invalid configuration credentials matching records.";
         }
-        $stmt->close();
     }
+    
+    $database->closeConnection();
 }
-$conn->close();
 ?>
 
 <!DOCTYPE html>
@@ -83,7 +69,7 @@ $conn->close();
                 </div>
 
                 <?php if (!empty($error)): ?>
-                    <div class="alert-error"><?php echo $error; ?></div>
+                    <div class="alert-error" style="background: #fef2f2; border-left: 4px solid #ef4444; color: #991b1b; padding: 12px; border-radius: 6px; margin-bottom: 20px; font-size: 14px;"><?php echo $error; ?></div>
                 <?php endif; ?>
 
                 <form action="login.php" method="POST">
