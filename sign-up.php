@@ -121,7 +121,7 @@ $conn->close();
 
             <div class="input-wrapper full-width">
                 <label for="password">Password<span>*</span></label>
-                <input type="password" id="password" name="password" required minlength="6" placeholder="••••••••">
+                <input type="password" id="password" name="password" required minlength="8" placeholder="••••••••">
             </div>
 
             <div class="full-width">
