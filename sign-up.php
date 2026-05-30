@@ -36,7 +36,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $error = "Please enter a valid email address style configuration.";
     } elseif (strlen($password) < 6) {
-        $error = "Password security constraint failure: Must be at least 6 characters.";
+        $error = "Password security constraint failure: Must be at least 8 characters.";
     } else {
         
         // Check database records to prevent duplicate user profile emails
